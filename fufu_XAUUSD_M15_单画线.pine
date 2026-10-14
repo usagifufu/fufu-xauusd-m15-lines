@@ -1,5 +1,5 @@
 //@version=5
-indicator("fufu XAUUSDT 15m 单画线", shorttitle = "fufu XAU M15", overlay = true, max_bars_back = 3000, max_lines_count = 500, max_labels_count = 500)
+indicator("fufu XAUUSD 15m 单画线", shorttitle = "fufu XAU M15", overlay = true, max_bars_back = 3000, max_lines_count = 500, max_labels_count = 500)
 
 // ======================= 脚本说明 =======================
 // 复刻 TradingView 上那套 XAUUSD 画法。图上四类元素：

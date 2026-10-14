@@ -1,4 +1,4 @@
-# fufu XAU/USDT M15 单画线
+# fufu XAUUSD M15 单画线
 
 TradingView **Pine v5** 指标。在黄金 15 分钟图上自动画出四类元素：
 
@@ -187,7 +187,7 @@ ZigZag 折点
 
 ## 六、使用注意
 
-1. **TradingView 上加载到 `XAUUSD` 图表**（OANDA / FX 的现货黄金）。脚本名沿用本系列的 `XAU_USDT` 命名习惯，标的其实写 `XAUUSD` 更准确。
+1. **TradingView 上加载到 `XAUUSD` 图表**（OANDA / FX 的现货黄金）。脚本内的显示名同样是 `XAUUSD`，与要加载的标的保持一致。数据源用的是币安 XAUUSDT 永续，与 TradingView 的 XAUUSD 现货相差 0.1% ~ 0.3%。
 2. **只在最后一根 K 线重算重画**（`barstate.islast`），历史 K 线上不画线。这是刻意设计，避免把几百根历史 K 线都画满。
 3. **状态机写在全局作用域**，只有绘制在 `barstate.islast` 里。这条很关键：如果把状态机也塞进 `barstate.islast`，它只在末根算一次，方向会永远停在「尚未判定」。
 4. **切换周期后要重看一下输出条数**。「识别回看根数」默认 2500 是按 15m 调的，切到 5m 相当于只回看 8.7 天，切到 1H 相当于回看 104 天。按需调整。
