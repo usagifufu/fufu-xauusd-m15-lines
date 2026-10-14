@@ -1,0 +1,13 @@
+# 本文件自身也用 LF（不声明它的话，autocrlf=true 会让工作区被转成 CRLF）
+.gitattributes text eol=lf
+
+# Pine 脚本一律以 LF 存储
+*.pine text eol=lf
+
+# Markdown 同样用 LF
+*.md text eol=lf
+
+# 无扩展名的文本文件（LICENSE / NOTICE 等）：GitHub 靠文件名识别许可证，
+# 一旦行尾被 autocrlf 转成 CRLF，blob 就与本地字节不一致，逐字节校验会失败。
+LICENSE text eol=lf
+NOTICE  text eol=lf

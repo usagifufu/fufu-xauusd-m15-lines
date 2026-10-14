@@ -1,0 +1,420 @@
+//@version=5
+indicator("fufu XAUUSDT 15m 单画线", shorttitle = "fufu XAU M15", overlay = true, max_bars_back = 3000, max_lines_count = 500, max_labels_count = 500)
+
+// ======================= 脚本说明 =======================
+// 复刻 TradingView 上那套 XAUUSD 画法。图上四类元素：
+//
+//   ① ZigZag 摆动折线 —— 连接交替的已确认摆动高低点，看价格结构路径。
+//   ② 第N阻力 / 第N支撑 —— 摆动点按「离现价远近」排序分档，第1 = 离现价最近。
+//                        价格走过去之后编号会递补，所以编号是动态的。
+//   ③ 多空关键位 —— 结构状态机给的方向分界：做多时 = 最近一个已确认的摆动低点，
+//                  收盘跌破即转空；做空时 = 最近一个已确认的摆动高点，收盘突破即转多。
+//                  它同时就是结构止损位。
+//   ④ 触及信号箭头 —— 下探关键位后收回 → 红↑（支撑成立）；
+//                    上冲关键位后回落 → 绿↓（阻力成立）。
+//
+// 配色：结构线蓝、多空关键位红、ZigZag 浅蓝（跟参考图一致，不是红涨绿跌那套）。
+//
+// ⚠ 两个必须知道的参数：
+//   「识别回看根数」默认 2500 —— 参考图上的高位（如 4275 / 4316）来自一个多月前的
+//   摆动点，窗口调小到 900 就直接看不到了。
+//   「ZigZag 最小摆动幅度」默认 0.80% —— 这是拿 4 个参考时点逐条比对扫出来的，
+//   调小会把噪声小摆动放进「第N档位」，把真正的结构位挤掉。
+
+// ======================= 常驻免责声明 =======================
+DISC_TXT = "⚠ 免责声明：本指标仅为技术分析辅助工具，不构成任何投资建议。黄金波动大，据此操作盈亏自负。"
+
+// ======================= ① 识别参数 =======================
+gP = "① 识别参数"
+pivL    = input.int(10,    "摆动点 左K线数",   minval = 1,    maxval = 50,   group = gP, tooltip = "左右各 N 根内最高/最低才算摆动点")
+pivR    = input.int(10,    "摆动点 右K线数",   minval = 1,    maxval = 50,   group = gP)
+lookbk  = input.int(2500,  "识别回看根数",     minval = 100,  maxval = 3000, group = gP, tooltip = "15m × 2500 ≈ 26 天。参考图上的 4275/4316 是一个多月前的位，窗口小了就看不到。上限 3000 与 max_bars_back 对齐")
+nearPct = input.float(0.20, "贴近现价忽略 %",  minval = 0.0,  maxval = 2.0,  step = 0.05, group = gP, tooltip = "离现价太近的摆动点不参与分档，避免线压在现价上")
+ampPct  = input.float(0.80, "ZigZag 最小摆动幅度 %", minval = 0.05, maxval = 5.0, step = 0.05, group = gP, tooltip = "相邻两个折点的最小幅度。扫出来的默认值：0.80% 时对参考图 4 个时点的命中率是 19/23")
+
+// ======================= ② 分档 =======================
+gN = "② 分档（第N阻力 / 第N支撑）"
+maxN   = input.int(3,       "每侧最多档位", minval = 1, maxval = 5,   group = gN, tooltip = "参考图多数时点是第1~第3，偶尔出现第4")
+gapPct = input.float(0.50,  "同侧最小间距 %", minval = 0.0, maxval = 3.0, step = 0.05, group = gN, tooltip = "同侧两条线价位差小于此幅度时只留更近的那条")
+zzDraw = input.int(500,     "结构线向左画多少根", minval = 0, maxval = 3000, group = gN)
+
+// ======================= ③ 多空关键位 =======================
+gD = "③ 多空关键位"
+showDiv  = input.bool(true,  "显示多空关键位", group = gD, tooltip = "做多时它是最近一个已确认的摆动低点，收盘跌破就转空；做空时是最近一个已确认的摆动高点，收盘突破就转多。它同时也是结构止损位")
+divL     = input.int(14,     "关键位 左K线数", minval = 1, maxval = 50, group = gD, tooltip = "关键位用独立的一套枢轴，比画线的 10 更粗：画线找具体价位，关键位判大结构")
+divR     = input.int(14,     "关键位 右K线数", minval = 1, maxval = 50, group = gD)
+divBkPct = input.float(0.80, "穿越确认 %",     minval = 0.0, maxval = 5.0, step = 0.05, group = gD, tooltip = "收盘价须超出关键位这个幅度才认定换边。黄金 15m 噪声比 BTC 大得多：同样参数下 BTC 只翻 6 次，黄金用 0.15% 要翻 47 次，放宽到 0.80% 才降到 9 次")
+
+// ======================= ④ 触及信号 =======================
+gS = "④ 触及信号箭头"
+showSig  = input.bool(true,  "显示触及信号", group = gS)
+sigTol   = input.float(0.20, "触及容差 %",   minval = 0.0, maxval = 2.0, step = 0.05, group = gS, tooltip = "价格进入关键位 ±这个幅度算「触及」")
+sigLook  = input.int(260,    "信号回看根数", minval = 20, maxval = 1000, group = gS, tooltip = "15m × 260 ≈ 2.7 天")
+sigMax   = input.int(2,      "每条线最多几个信号", minval = 1, maxval = 5, group = gS, tooltip = "每条关键位只标最近的这几次触及，避免箭头糊满屏")
+
+// ======================= ⑤ 颜色与样式 =======================
+gC = "⑤ 颜色与样式"
+cRes  = input.color(#2962ff, "阻力线（蓝）",       group = gC)
+cSup  = input.color(#2962ff, "支撑线（蓝）",       group = gC)
+cDiv  = input.color(#f23645, "多空关键位（红）",   group = gC)
+cZZ   = input.color(#5b8dff, "ZigZag 折线",        group = gC)
+cLong = input.color(#f85149, "做多信号（红 ↑）",   group = gC)
+cShrt = input.color(#3fb950, "做空信号（绿 ↓）",   group = gC)
+lw     = input.int(1,   "结构线宽",       minval = 1, maxval = 4,   group = gC)
+divW   = input.int(2,   "关键位线宽",     minval = 1, maxval = 6,   group = gC)
+extBar = input.int(60,  "向右延长K线数",  minval = 0, maxval = 300, group = gC, tooltip = "15m × 60 = 15 小时")
+showLbl = input.bool(true, "显示右侧标签", group = gC)
+showZZ  = input.bool(true, "显示 ZigZag 折线", group = gC)
+showLeg = input.bool(true, "显示配色图例", group = gC)
+
+// ======================= ⑥ 手动价位 =======================
+gM = "⑥ 手动价位（追加，可留空）"
+manualStr = input.string("", "价格|标签;价格|标签", group = gM, tooltip = "例：4210|前高压力;4146|结构支撑。留空则只用自动识别")
+manCol    = input.color(#d29922, "手动线颜色", group = gM)
+
+// ======================= 状态容器（必须先于工具函数声明）=======================
+var line[]  LNS = array.new_line()
+var label[] LBS = array.new_label()
+var box[]   BXS = array.new_box()
+
+// ======================= 工具函数 =======================
+f_hLine(int x0, float y, string txt, color c, int w) =>
+    line ln = line.new(x0, y, bar_index + extBar, y, color = c, width = w, style = line.style_solid)
+    array.push(LNS, ln)
+    if showLbl
+        label lb = label.new(bar_index + extBar, y, text = txt, style = label.style_label_left, color = color.new(color.black, 100), textcolor = c, size = size.small, textalign = text.align_left)
+        array.push(LBS, lb)
+    ln
+
+// ---- 画线用的摆动点 ----
+var float[] phP = array.new_float()     // 摆动高点价位
+var int[]   phB = array.new_int()       // 摆动高点所在 bar_index
+var float[] plP = array.new_float()
+var int[]   plB = array.new_int()
+
+// ---- ZigZag 折点（交替）----
+var float[] zzP = array.new_float()
+var int[]   zzB = array.new_int()
+var bool[]  zzH = array.new_bool()
+
+// ---- 多空关键位 ----
+var float lastSupLv = na                // 最近一个已确认的摆动低点
+var float lastResLv = na                // 最近一个已确认的摆动高点
+var int   trendDir  = 0                 // 1 = 做多，-1 = 做空，0 = 尚未判定
+
+// ---- 关键位历史（供信号回看）----
+var float[] hLo = array.new_float()
+var float[] hHi = array.new_float()
+var float[] hCl = array.new_float()
+var float[] hOp = array.new_float()
+var int[]   hB  = array.new_int()
+
+// ======================= 参数换算 =======================
+float nearP = nearPct / 100.0
+float ampP  = ampPct / 100.0
+float gapP  = gapPct / 100.0
+float divBk = divBkPct / 100.0
+float sigT  = sigTol / 100.0
+
+// ======================= ① 摆动点累加（画线用）=======================
+float pvH = ta.pivothigh(pivL, pivR)
+float pvL = ta.pivotlow(pivL, pivR)
+
+// 常驻标签的定位基准。ta.* 必须在每根 K 线上都调用，不能挪进 islast
+float statLo  = ta.lowest(low, 200)
+float statAtr = ta.atr(14)
+
+if not na(pvH)
+    array.push(phP, pvH)
+    array.push(phB, bar_index - pivR)
+if not na(pvL)
+    array.push(plP, pvL)
+    array.push(plB, bar_index - pivR)
+
+// 裁剪：只保留回看窗口内的摆动点，避免数组无限增长
+int cutB = bar_index - lookbk
+if array.size(phB) > 0
+    while array.get(phB, 0) < cutB
+        array.shift(phB)
+        array.shift(phP)
+        if array.size(phB) == 0
+            break
+if array.size(plB) > 0
+    while array.get(plB, 0) < cutB
+        array.shift(plB)
+        array.shift(plP)
+        if array.size(plB) == 0
+            break
+
+// ======================= ② ZigZag 累加（全局逐根）=======================
+// 同类型折点取更极端的那根；异类型须满足最小幅度才成交替。
+if not na(pvH)
+    int nzH = array.size(zzP)
+    if nzH == 0
+        array.push(zzP, pvH)
+        array.push(zzB, bar_index - pivR)
+        array.push(zzH, true)
+    else
+        float lpxH = array.get(zzP, nzH - 1)
+        bool  lHH  = array.get(zzH, nzH - 1)
+        if lHH
+            if pvH > lpxH
+                array.set(zzP, nzH - 1, pvH)
+                array.set(zzB, nzH - 1, bar_index - pivR)
+        else
+            if lpxH > 0 and (pvH - lpxH) / lpxH >= ampP
+                array.push(zzP, pvH)
+                array.push(zzB, bar_index - pivR)
+                array.push(zzH, true)
+
+if not na(pvL)
+    int nzL = array.size(zzP)
+    if nzL == 0
+        array.push(zzP, pvL)
+        array.push(zzB, bar_index - pivR)
+        array.push(zzH, false)
+    else
+        float lpxL = array.get(zzP, nzL - 1)
+        bool  lHL  = array.get(zzH, nzL - 1)
+        if not lHL
+            if pvL < lpxL
+                array.set(zzP, nzL - 1, pvL)
+                array.set(zzB, nzL - 1, bar_index - pivR)
+        else
+            if lpxL > 0 and (lpxL - pvL) / lpxL >= ampP
+                array.push(zzP, pvL)
+                array.push(zzB, bar_index - pivR)
+                array.push(zzH, false)
+
+// ZigZag 裁剪
+if array.size(zzB) > 0
+    while array.get(zzB, 0) < cutB
+        array.shift(zzB)
+        array.shift(zzP)
+        array.shift(zzH)
+        if array.size(zzB) == 0
+            break
+
+// ======================= ③ 多空关键位状态机（全局，不能写进 islast）=======================
+float dvH = ta.pivothigh(divL, divR)
+float dvL = ta.pivotlow(divL, divR)
+
+if not na(dvL)
+    lastSupLv := dvL
+if not na(dvH)
+    lastResLv := dvH
+
+// 方向只在收盘穿越时翻转。判定只看本方向那一侧的枢轴：
+// 否则区间震荡里「跌破低点」和「突破高点」会轮流成立，方向反复翻。
+if trendDir == 0
+    if not na(lastSupLv) and close > lastSupLv
+        trendDir := 1
+    else if not na(lastResLv) and close < lastResLv
+        trendDir := -1
+else if trendDir == 1
+    if not na(lastSupLv) and close < lastSupLv * (1 - divBk)
+        trendDir := -1
+else
+    if not na(lastResLv) and close > lastResLv * (1 + divBk)
+        trendDir := 1
+
+// ======================= ④ 关键位历史累加 =======================
+array.push(hLo, low)
+array.push(hHi, high)
+array.push(hCl, close)
+array.push(hOp, open)
+array.push(hB, bar_index)
+if array.size(hB) > sigLook + 10
+    array.shift(hB)
+    array.shift(hLo)
+    array.shift(hHi)
+    array.shift(hCl)
+    array.shift(hOp)
+
+// ======================= ⑤ 绘制（只在末根 K 线重算重画）=======================
+if barstate.islast
+    // ---- 清理上一轮 ----
+    if array.size(LNS) > 0
+        for i = 0 to array.size(LNS) - 1
+            line.delete(array.get(LNS, i))
+        array.clear(LNS)
+    if array.size(LBS) > 0
+        for i = 0 to array.size(LBS) - 1
+            label.delete(array.get(LBS, i))
+        array.clear(LBS)
+    if array.size(BXS) > 0
+        for i = 0 to array.size(BXS) - 1
+            box.delete(array.get(BXS, i))
+        array.clear(BXS)
+
+    float close_ = close
+    int   x0     = math.max(bar_index - zzDraw, 0)
+    int   sigGot = 0
+
+    // ---- 分档：ZigZag 折点按离现价远近排序 → 同侧最小间距去重 → 编号第1..N ----
+    float[] upC = array.new_float()      // 上方候选价位
+    int[]   upK = array.new_int()        // 对应折点下标
+    float[] dnC = array.new_float()
+    int[]   dnK = array.new_int()
+    if array.size(zzP) > 0
+        for i = 0 to array.size(zzP) - 1
+            float p = array.get(zzP, i)
+            bool  h = array.get(zzH, i)
+            if h and p > close_ * (1 + nearP)
+                array.push(upC, p)
+                array.push(upK, array.get(zzB, i))
+            else if not h and p < close_ * (1 - nearP)
+                array.push(dnC, p)
+                array.push(dnK, array.get(zzB, i))
+
+    // 选档：每轮取「剩余中离现价最近」的，与已选的最小间距都满足才收下
+    // 循环控制变量统一在外面声明 —— Pine 对 while 体内新声明的变量支持不稳
+    float[] upSel  = array.new_float()
+    int[]   upSelB = array.new_int()
+    float[] dnSel  = array.new_float()
+    int[]   dnSelB = array.new_int()
+    int[]   used   = array.new_int()
+    int   guard = 0
+    int   bi    = -1
+    float bd    = 0.0
+    bool  ok    = false
+    float pp    = 0.0
+
+    while array.size(upSel) < maxN and guard < 400
+        guard += 1
+        bi := -1
+        bd := 1e18
+        if array.size(upC) > 0
+            for i = 0 to array.size(upC) - 1
+                if not array.includes(used, i)
+                    float d = math.abs(array.get(upC, i) - close_)
+                    if d < bd
+                        bd := d
+                        bi := i
+        if bi < 0
+            break
+        array.push(used, bi)
+        ok := true
+        if array.size(upSel) > 0
+            for j = 0 to array.size(upSel) - 1
+                pp := array.get(upSel, j)
+                if pp > 0 and math.abs(array.get(upC, bi) - pp) / pp <= gapP
+                    ok := false
+        if ok
+            array.push(upSel, array.get(upC, bi))
+            array.push(upSelB, array.get(upK, bi))
+
+    array.clear(used)
+    guard := 0
+    while array.size(dnSel) < maxN and guard < 400
+        guard += 1
+        bi := -1
+        bd := 1e18
+        if array.size(dnC) > 0
+            for i = 0 to array.size(dnC) - 1
+                if not array.includes(used, i)
+                    float d = math.abs(array.get(dnC, i) - close_)
+                    if d < bd
+                        bd := d
+                        bi := i
+        if bi < 0
+            break
+        array.push(used, bi)
+        ok := true
+        if array.size(dnSel) > 0
+            for j = 0 to array.size(dnSel) - 1
+                pp := array.get(dnSel, j)
+                if pp > 0 and math.abs(array.get(dnC, bi) - pp) / pp <= gapP
+                    ok := false
+        if ok
+            array.push(dnSel, array.get(dnC, bi))
+            array.push(dnSelB, array.get(dnK, bi))
+
+    // ---- 画 ZigZag 折线 ----
+    if showZZ and array.size(zzP) > 1
+        for i = 0 to array.size(zzP) - 2
+            int b1 = array.get(zzB, i)
+            int b2 = array.get(zzB, i + 1)
+            if b2 >= x0
+                line zl = line.new(b1, array.get(zzP, i), b2, array.get(zzP, i + 1), color = cZZ, width = 1, style = line.style_solid)
+                array.push(LNS, zl)
+
+    // ---- 画档位线：第1 = 离现价最近的 ----
+    if array.size(upSel) > 0
+        for i = 0 to array.size(upSel) - 1
+            float px = array.get(upSel, i)
+            string txt = "第" + str.tostring(i + 1) + "阻力  " + str.tostring(px, format.mintick)
+            f_hLine(x0, px, txt, cRes, lw)
+    if array.size(dnSel) > 0
+        for i = 0 to array.size(dnSel) - 1
+            float px = array.get(dnSel, i)
+            string txt = "第" + str.tostring(i + 1) + "支撑  " + str.tostring(px, format.mintick)
+            f_hLine(x0, px, txt, cSup, lw)
+
+    // ---- 画多空关键位 ----
+    float divLv = trendDir == 1 ? lastSupLv : trendDir == -1 ? lastResLv : na
+    if showDiv and not na(divLv)
+        string dtxt = trendDir == 1 ? "多空关键位  " + str.tostring(divLv, format.mintick) + "（收盘跌破 " + str.tostring(divLv * (1 - divBk), format.mintick) + " 转空）" : "多空关键位  " + str.tostring(divLv, format.mintick) + "（收盘突破 " + str.tostring(divLv * (1 + divBk), format.mintick) + " 转多）"
+        f_hLine(x0, divLv, dtxt, cDiv, divW)
+
+    // ---- 触及信号：用当前档位线回看历史 ----
+    if showSig
+        float[] lvAll = array.new_float()
+        if array.size(upSel) > 0
+            for i = 0 to array.size(upSel) - 1
+                array.push(lvAll, array.get(upSel, i))
+        if array.size(dnSel) > 0
+            for i = 0 to array.size(dnSel) - 1
+                array.push(lvAll, array.get(dnSel, i))
+        if array.size(lvAll) > 0
+            int nH   = array.size(hB)
+            int sigN = math.min(sigLook, nH)
+            for j = 0 to array.size(lvAll) - 1
+                float px  = array.get(lvAll, j)
+                sigGot := 0
+                // 从最新往回扫，每条线数够「每条线最多几个信号」就停
+                for k = 0 to sigN - 1
+                    if sigGot < sigMax
+                        int   bi = nH - 1 - k
+                        float lo = array.get(hLo, bi)
+                        float hi = array.get(hHi, bi)
+                        float cl = array.get(hCl, bi)
+                        float op = array.get(hOp, bi)
+                        if lo <= px * (1 + sigT) and cl > px and op >= px
+                            label sg = label.new(array.get(hB, bi), lo, text = "↑", style = label.style_label_up, color = color.new(color.black, 100), textcolor = cLong, size = size.small)
+                            array.push(LBS, sg)
+                            sigGot += 1
+                        else if hi >= px * (1 - sigT) and cl < px and op <= px
+                            label sg = label.new(array.get(hB, bi), hi, text = "↓", style = label.style_label_down, color = color.new(color.black, 100), textcolor = cShrt, size = size.small)
+                            array.push(LBS, sg)
+                            sigGot += 1
+
+    // ---- 手动价位 ----
+    if str.length(manualStr) > 0
+        string[] parts = str.split(manualStr, ";")
+        if array.size(parts) > 0
+            for i = 0 to array.size(parts) - 1
+                string seg = array.get(parts, i)
+                string[] kv = str.split(seg, "|")
+                if array.size(kv) > 0
+                    float y = str.tonumber(array.get(kv, 0))
+                    if not na(y)
+                        string t = "手动价位"
+                        if array.size(kv) > 1
+                            t := array.get(kv, 1)
+                        f_hLine(x0, y, t + "  " + str.tostring(y, format.mintick), manCol, lw)
+
+    // ---- 趋势状态 + 配色图例 + 免责声明（图表右下角常驻）----
+    float labY = math.min(statLo, close_) - statAtr * 1.8
+
+    if showLeg
+        label lg = label.new(bar_index, labY, text = "🔵 蓝线 = 结构位（第N阻力 / 第N支撑，第1 = 离现价最近）　｜　🔴 红线 = 多空关键位（结构分界兼止损位）　｜　🔵 折线 = ZigZag 摆动路径　｜　🔴↑ = 支撑成立　🟢↓ = 阻力成立", style = label.style_label_left, color = color.new(color.black, 80), textcolor = color.gray, size = size.tiny, textalign = text.align_left)
+        array.push(LBS, lg)
+        label dl = label.new(bar_index, labY + statAtr * 1.2, text = DISC_TXT, style = label.style_label_left, color = color.new(color.black, 90), textcolor = color.gray, size = size.tiny, textalign = text.align_left)
+        array.push(LBS, dl)
+
+    // ---- 左上角趋势状态 ----
+    string sDir = trendDir == 1 ? "📈 做多" : trendDir == -1 ? "📉 做空" : "— 尚未判定"
+    string sSub = "结构位 " + str.tostring(array.size(upSel)) + " 上 / " + str.tostring(array.size(dnSel)) + " 下　｜　ZigZag 折点 " + str.tostring(array.size(zzP)) + " 个"
+    label st = label.new(bar_index - zzDraw, math.min(statLo, close_) - statAtr * 0.9, text = sDir + "　" + sSub, style = label.style_label_right, color = color.new(color.black, 70), textcolor = trendDir == 1 ? cLong : trendDir == -1 ? cShrt : color.gray, size = size.small, textalign = text.align_left)
+    array.push(LBS, st)
