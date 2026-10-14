@@ -43,7 +43,7 @@ gD = "③ 多空关键位"
 showDiv  = input.bool(true,  "显示多空关键位", group = gD, tooltip = "做多时它是最近一个已确认的摆动低点，收盘跌破就转空；做空时是最近一个已确认的摆动高点，收盘突破就转多。它同时也是结构止损位")
 divL     = input.int(14,     "关键位 左K线数", minval = 1, maxval = 50, group = gD, tooltip = "关键位用独立的一套枢轴，比画线的 10 更粗：画线找具体价位，关键位判大结构")
 divR     = input.int(14,     "关键位 右K线数", minval = 1, maxval = 50, group = gD)
-divBkPct = input.float(0.80, "穿越确认 %",     minval = 0.0, maxval = 5.0, step = 0.05, group = gD, tooltip = "收盘价须超出关键位这个幅度才认定换边。黄金 15m 噪声比 BTC 大得多：同样参数下 BTC 只翻 6 次，黄金用 0.15% 要翻 47 次，放宽到 0.80% 才降到 9 次")
+divBkPct = input.float(0.80, "穿越确认 %",     minval = 0.0, maxval = 5.0, step = 0.05, group = gD, tooltip = "收盘价须超出关键位这个幅度才认定换边。0.80% 是按黄金自己的数据选的：6000 根里只翻 9 次，平均持有 667 根（约 6.9 天），方向稳但迟钝。想要更灵敏就调到 0.15%（会翻 47 次，平均持有 128 根，跟 BTC / ETH 同级）")
 
 // ======================= ④ 触及信号 =======================
 gS = "④ 触及信号箭头"
